@@ -1,27 +1,23 @@
 package uz.foursquare.todoapp.todolist_screen
 
 import android.content.Context
-import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -33,15 +29,17 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
@@ -61,8 +59,7 @@ import uz.foursquare.todoapp.todolist_screen.view_model.ToDoListViewModel
 import uz.foursquare.todoapp.types.Importance
 import uz.foursquare.todoapp.types.TodoItem
 import uz.foursquare.todoapp.ui.theme.ToDoAppTheme
-import uz.foursquare.todoapp.utils.convertToReadableFormat
-import java.util.Date
+import uz.foursquare.todoapp.utils.convertMillisToDate
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -77,7 +74,7 @@ fun ToDoListScreen(viewModel: ToDoListViewModel, navController: NavController, c
 
         val isCollapsed =
             remember { derivedStateOf { scrollBehavior.state.collapsedFraction > 0.5 } }
-        val completedTasks = viewModel.tasks.collectAsState().value.count { it.isCompleted }
+        val completedTasks = viewModel.tasksStateFlow.collectAsState().value.count { it.done }
         Scaffold(
             modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
             topBar = {
@@ -107,6 +104,20 @@ fun ToDoListScreen(viewModel: ToDoListViewModel, navController: NavController, c
                 verticalArrangement = Arrangement.Top,
             ) {
                 MainContent(viewModel = viewModel, navController = navController)
+
+                viewModel.errorMessage.collectAsState().value?.let { errorMessage ->
+                    Snackbar(
+                        action = {
+                            Button(onClick = {
+                                viewModel.tasksStateFlow
+                            }) {
+                                Text("Повторить")
+                            }
+                        }
+                    ) { Text("Something went wrong") }
+                }
+
+
             }
         }
     }
@@ -158,7 +169,7 @@ fun MainContent(
             .padding(16.dp)
             .fillMaxSize()
     ) {
-        val tasks = viewModel.tasks.collectAsState()
+        val tasks = viewModel.tasksStateFlow.collectAsState()
 
         TaskList(tasks.value, viewModel, navController)
     }
@@ -192,7 +203,8 @@ fun TaskList(tasks: List<TodoItem>, viewModel: ToDoListViewModel, navController:
                         navController.navigate("notesScreen/$it")
                     },
                     onCompleteChange = { isChecked ->
-                        viewModel.toggleTaskCompletion(task, isChecked)
+                        val changedTask = task.copy(done = isChecked)
+                        viewModel.toggleTaskCompletion(changedTask)
                     })
             }
         }
@@ -207,25 +219,24 @@ fun TaskItem(
         verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxHeight()
     ) {
         val textColor = when (task.importance) {
-            Importance.LOW ->if (task.isCompleted) Color.Gray else Color.Black
-            Importance.LOW -> if (task.isCompleted) Color.Gray else Color.Black
-            Importance.MEDIUM -> if (task.isCompleted) Color.Gray else Color.Black
-            Importance.HIGH -> if (task.isCompleted) Color.Gray else Color(0xFFFF3B30)
+            "low" -> if (task.done) Color.Gray else Color.Black
+            "medium" -> if (task.done) Color.Gray else Color.Black
+            "important" -> if (task.done) Color.Gray else Color(0xFFFF3B30)
             else -> Color.Black
         }
 
         val checkboxColor = when (task.importance) {
-            Importance.LOW -> if (task.isCompleted) Color.Gray else Color(0xFF007AFF)
-            Importance.MEDIUM -> if (task.isCompleted) Color.Gray else Color(0xFF007AFF)
-            Importance.HIGH -> if (task.isCompleted) Color.Gray else Color(0xFFFF3B30)
+            "low" -> if (task.done) Color.Gray else Color(0xFF007AFF)
+            "medium" -> if (task.done) Color.Gray else Color(0xFF007AFF)
+            "important" -> if (task.done) Color.Gray else Color(0xFFFF3B30)
             else -> Color(0xFF007AFF)
         }
 
         val textDecoration =
-            if (task.isCompleted) TextDecoration.LineThrough else TextDecoration.None
+            if (task.done) TextDecoration.LineThrough else TextDecoration.None
 
         Checkbox(
-            checked = task.isCompleted,
+            checked = task.done,
             onCheckedChange = { isChecked -> onCompleteChange(isChecked) },
             colors = CheckboxDefaults.colors(
                 checkedColor = Color(0xFF007AFF), uncheckedColor = checkboxColor
@@ -236,7 +247,7 @@ fun TaskItem(
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
             Row {
                 when (task.importance) {
-                    Importance.HIGH -> {
+                    "important" -> {
                         Icon(
                             painter = painterResource(id = R.drawable.high_priority_icon),
                             contentDescription = "Priority High",
@@ -247,7 +258,7 @@ fun TaskItem(
                         )
                     }
 
-                    Importance.MEDIUM -> {
+                    "medium" -> {
                         Icon(
                             painter = painterResource(id = R.drawable.medium_priority_icon),
                             contentDescription = "Priority Medium",
@@ -270,7 +281,7 @@ fun TaskItem(
 
             if (task.deadline != null) {
                 Text(
-                    text = task.deadline.convertToReadableFormat(),
+                    text = task.deadline.convertMillisToDate(),
                     color = Color.Gray,
                     fontSize = 14.sp,
                 )

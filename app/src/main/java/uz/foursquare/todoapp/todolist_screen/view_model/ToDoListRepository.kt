@@ -1,75 +1,158 @@
 package uz.foursquare.todoapp.todolist_screen.view_model
 
 import android.content.Context
-import android.content.SharedPreferences
+import android.util.Log
 import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
-import uz.foursquare.todoapp.types.Importance
+import com.google.gson.JsonObject
+import uz.foursquare.todoapp.network.ApiService
+import uz.foursquare.todoapp.network.Network
 import uz.foursquare.todoapp.types.TodoItem
-import java.util.Date
+import kotlin.coroutines.cancellation.CancellationException
 
 class ToDoListRepository(context: Context) {
 
-    private val sharedPreferences: SharedPreferences =
-        context.getSharedPreferences("ToDoApp", Context.MODE_PRIVATE)
-    private val gson = Gson()
+    private val sharedPreferences = context.getSharedPreferences("todo_list", Context.MODE_PRIVATE)
+    private val editor = sharedPreferences.edit()
 
-    // Load tasks from SharedPreferences or use default sample tasks
-    private var taskList: MutableList<TodoItem> = loadTasks()
+    // Load lastKnownRevision from SharedPreferences or use 0 if not set
+    private var lastKnownRevision: Int
+        get() = sharedPreferences.getInt("lastKnownRevision", 0)
+        set(value) {
+            editor.putInt("lastKnownRevision", value).apply()
+        }
 
-    private fun loadTasks(): MutableList<TodoItem> {
-        val json = sharedPreferences.getString("task_list", null)
-        val type = object : TypeToken<MutableList<TodoItem>>() {}.type
-        return if (json != null) gson.fromJson(json, type) else getDefaultTasks()
-    }
+    suspend fun getTasks(): Result<List<TodoItem>> {
+        try {
+            val response = Network.buildService(ApiService::class.java).getTasks()
+            Log.d("ToDoListRepository", "Response: ${response.body()}")
+            if (response.isSuccessful) {
+                val tasks = response.body()?.list ?: emptyList()
 
-    private fun saveTasks() {
-        val json = gson.toJson(taskList)
-        sharedPreferences.edit().putString("task_list", json).apply()
-    }
+                // Update lastKnownRevision and save it to SharedPreferences
+                lastKnownRevision = response.body()?.revision ?: lastKnownRevision
 
-    private fun getDefaultTasks(): MutableList<TodoItem> = mutableListOf(
-        TodoItem("1", "Task 1", Importance.LOW, null, false, Date(), Date()),
-        TodoItem("2", "Task 2", Importance.MEDIUM, Date(), true, Date(), Date()),
-        TodoItem("3", "Task 3", Importance.HIGH, Date(), false, Date(), Date()),
-        TodoItem("4", "Task 4", Importance.LOW, Date(), false, Date(), Date()),
-        TodoItem("5", "Task 5", Importance.MEDIUM, Date(), true, Date(), Date()),
-        TodoItem("6", "Task 6", Importance.HIGH, null, false, Date(), Date()),
-        TodoItem("7", "Task 7", Importance.LOW, Date(), true, Date(), Date()),
-        TodoItem("8", "Task 8", Importance.MEDIUM, Date(), false, Date(), Date()),
-        TodoItem("9", "Task 9", Importance.HIGH, Date(), true, Date(), Date()),
-        TodoItem("10", "Task 10", Importance.LOW, Date(), false, Date(), Date())
-    )
-
-    fun getTasks(): List<TodoItem> = taskList.toList()
-
-    fun addTask(task: TodoItem) {
-        taskList.add(task)
-        saveTasks()
-    }
-
-    fun deleteTask(task: TodoItem) {
-        taskList.remove(task)
-        saveTasks()
-    }
-
-    fun updateTaskCompletion(taskId: String, isCompleted: Boolean) {
-        val taskIndex = taskList.indexOfFirst { it.id == taskId }
-        if (taskIndex != -1) {
-            taskList[taskIndex] = taskList[taskIndex].copy(isCompleted = isCompleted)
-            saveTasks()
+                return Result.success(tasks)
+            } else {
+                throw Exception("Network request unsuccessful: ${response.code()}, ${response.message()}")
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            return Result.failure(e)
         }
     }
 
-    fun updateTask(task: TodoItem) {
-        val taskIndex = taskList.indexOfFirst { it.id == task.id }
-        if (taskIndex != -1) {
-            taskList[taskIndex] = task
-            saveTasks()
+    suspend fun addTask(note: TodoItem) {
+        try {
+            Log.d("ToDoListRepository", "addTask: json: ${createJsonObject(note)}")
+            val response =
+                Network.buildService(ApiService::class.java)
+                    .addTask(lastKnownRevision.toString(), createJsonObject(note))
+
+            if (response.isSuccessful) {
+                Log.d("ToDoListRepository", "Task added successfully")
+            } else {
+                throw Exception("Network request unsuccessful: ${response.code()}, ${response.message()}")
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw e
+        }
+
+    }
+
+    suspend fun deleteTask(id: String) {
+        try {
+            val response =
+                Network.buildService(ApiService::class.java)
+                    .removeTask(id = id, lastKnownRevision = lastKnownRevision.toString())
+
+            if (response.isSuccessful) {
+                Log.d("ToDoListRepository", "Task deleted successfully")
+            } else {
+                throw Exception("Network request unsuccessful: ${response.code()}, ${response.message()}")
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw e
         }
     }
 
-    fun getTaskById(taskId: String): TodoItem? {
-        return taskList.find { it.id == taskId }
+    suspend fun updateTask(note: TodoItem) {
+        try {
+            val response =
+                Network.buildService(ApiService::class.java)
+                    .updateTask(lastKnownRevision.toString(), note.id, createJsonObject(note))
+
+            if (response.isSuccessful) {
+                Log.d("ToDoListRepository", "Task updated successfully")
+            } else {
+                throw Exception("Network request unsuccessful: ${response.code()}, ${response.message()}")
+            }
+
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw e
+        }
+
     }
+
+    private fun getTasksFromSharedPreferences(): List<TodoItem> {
+        val serializedTasks = sharedPreferences.getString("tasks", "[]")
+        return try {
+            Gson().fromJson(serializedTasks, Array<TodoItem>::class.java).toList()
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun saveTasksToSharedPreferences(tasks: List<TodoItem>) {
+        val serializedTasks = Gson().toJson(tasks)
+        editor.putString("tasks", serializedTasks).apply()
+    }
+
+    private fun createJsonObject(note: TodoItem): JsonObject {
+
+        val element = JsonObject().apply {
+            addProperty("id", note.id)
+            addProperty("text", note.text)
+            addProperty("importance", note.importance)
+            addProperty("deadline", note.deadline)
+            addProperty("done", note.done)
+            addProperty("color", note.color)
+            addProperty("created_at", note.createdAt)
+            addProperty("changed_at", note.changedAt)
+            addProperty("last_updated_by", note.lastUpdatedBy)
+        }
+
+        val jsonObject = JsonObject().apply {
+            add("element", element)
+        }
+
+        return jsonObject
+    }
+
+    suspend fun getTaskById(id: String): Result<TodoItem> {
+        try {
+            val response =
+                Network.buildService(ApiService::class.java)
+                    .getTaskById(lastKnownRevision = lastKnownRevision.toString(), id = id)
+
+            if (response.isSuccessful) {
+                return response.body()?.let { Result.success(it.element) }
+                    ?: Result.failure(Exception("Response body is null"))
+            } else {
+                throw Exception("Network request unsuccessful: ${response.code()}, ${response.message()}")
+            }
+
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw e
+        }
+    }
+
+
 }
