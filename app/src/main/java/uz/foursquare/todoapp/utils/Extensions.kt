@@ -16,11 +16,11 @@ fun Long.convertMillisToDate(locale: Locale = Locale.getDefault()): String {
     return formatter.format(date)
 }
 
-fun Long.convertStringToDate(): Date? {
+fun String.convertStringToDate(): Date? {
     return try {
         val dateFormat =
             SimpleDateFormat("d MMMM yyyy", Locale.getDefault()) // Adjust the format as needed
-        dateFormat.parse(this.convertMillisToDate()) ?: Date()
+        dateFormat.parse(this) ?: Date()
     } catch (e: ParseException) {
         null
     }

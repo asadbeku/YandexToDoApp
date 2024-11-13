@@ -1,5 +1,7 @@
 package uz.foursquare.todoapp.note
 
+import android.app.DatePickerDialog
+import android.content.Context
 import android.util.Log
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -28,14 +30,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SelectableDates
-import androidx.compose.material3.Snackbar
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -43,14 +43,22 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
+import com.google.android.material.datepicker.MaterialDatePicker
 import uz.foursquare.todoapp.note.view_model.NotesViewModel
+import uz.foursquare.todoapp.types.Importance
 import uz.foursquare.todoapp.types.TodoItem
 import uz.foursquare.todoapp.ui.theme.ToDoAppTheme
 import uz.foursquare.todoapp.utils.convertMillisToDate
+import uz.foursquare.todoapp.utils.convertStringToDate
+import uz.foursquare.todoapp.utils.convertToReadableFormat
+import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.UUID
 
@@ -58,14 +66,7 @@ import java.util.UUID
 @Composable
 fun NotesScreen(navController: NavController, viewModel: NotesViewModel, taskId: String?) {
     var currentTodoItem by remember { mutableStateOf<TodoItem?>(null) }
-
-    if (taskId != null && taskId != "null" && taskId.isNotBlank()) {
-        viewModel.getNoteById(taskId)
-    }
-
-    val task = viewModel.taskStateFlow.collectAsState().value
-
-    Log.d("NotesScreen", "NotesScreen: $task")
+    val task = taskId?.let { viewModel.getTaskById(it) }
 
     val backgroundColor = if (isSystemInDarkTheme()) Color(0xFF252528) else Color.White
     val textColor = if (isSystemInDarkTheme()) Color.White else Color.Black
@@ -82,11 +83,10 @@ fun NotesScreen(navController: NavController, viewModel: NotesViewModel, taskId:
                 },
                 actions = {
                     TextButton(onClick = {
-                        Log.d("NotesScreen", "Saving note: $taskId")
-                        if (!taskId.isNullOrEmpty()) {
-                            currentTodoItem?.let { viewModel.addNote(it) }
-                        } else {
-                            currentTodoItem?.let { viewModel.updateNote(it) }
+                        if (taskId == null) currentTodoItem?.let { viewModel.addNote(it) } else currentTodoItem?.let {
+                            viewModel.updateNote(
+                                it
+                            )
                         }
                         navController.popBackStack()
                     }) {
@@ -96,6 +96,7 @@ fun NotesScreen(navController: NavController, viewModel: NotesViewModel, taskId:
                             fontSize = 16.sp,
                             modifier = Modifier
                         )
+
                     }
                 }
             )
@@ -106,24 +107,13 @@ fun NotesScreen(navController: NavController, viewModel: NotesViewModel, taskId:
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
+
             TodoInputFields(task) {
                 currentTodoItem = it
             }
 
             val isDeleteEnabled = task != null
             DeleteContainer(isDeleteEnabled, viewModel, task, navController)
-
-            viewModel.errorMessage.collectAsState().value?.let { errorMessage ->
-                Snackbar(
-                    action = {
-                        Button(onClick = {
-                            viewModel.getNoteById(taskId ?: "")
-                        }) {
-                            Text("Повторить")
-                        }
-                    }
-                ) { Text("Something went wrong") }
-            }
         }
     }
 }
@@ -136,11 +126,19 @@ fun TodoInputFields(task: TodoItem?, onSave: (TodoItem) -> Unit) {
             .padding(16.dp)
     ) {
 
-        var taskText by remember { mutableStateOf(task?.text ?: "") }
-        var selectedImportance by remember { mutableStateOf(task?.importance ?: "low") }
+        var taskText by remember { mutableStateOf("") }
+        var selectedImportance by remember { mutableStateOf(Importance.LOW) }
         var isDueDateEnabled by remember { mutableStateOf(false) }
-        var dueDate by remember { mutableStateOf(task?.deadline?.convertMillisToDate() ?: "") }
+        var dueDate by remember { mutableStateOf("") }
+
         var isDatePickerVisible by remember { mutableStateOf(false) }
+
+        if (task != null) {
+            taskText = task.text
+            selectedImportance = task.importance
+            isDueDateEnabled = task.deadline != null
+            dueDate = task.deadline?.convertToReadableFormat() ?: ""
+        }
 
         OutlinedTextField(
             value = taskText,
@@ -157,7 +155,8 @@ fun TodoInputFields(task: TodoItem?, onSave: (TodoItem) -> Unit) {
 
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -173,6 +172,7 @@ fun TodoInputFields(task: TodoItem?, onSave: (TodoItem) -> Unit) {
                         color = Color(0xFF007AFF),
                     )
                 }
+
             }
 
             Spacer(modifier = Modifier.width(16.dp))
@@ -194,26 +194,21 @@ fun TodoInputFields(task: TodoItem?, onSave: (TodoItem) -> Unit) {
                     isDatePickerVisible = false
                 })
             }
+
+            val todoItem = TodoItem(
+                id = UUID.randomUUID().toString(), // Generate unique ID
+                text = taskText,
+                importance = selectedImportance,
+                deadline = if (isDueDateEnabled) dueDate.convertStringToDate() else null,
+                isCompleted = false,
+                createdAt = Date(),
+                modifiedAt = null
+            )
+
+            onSave(todoItem)
         }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        val todoItem = TodoItem(
-            id = task?.id ?: UUID.randomUUID().toString(),
-            text = taskText,
-            importance = selectedImportance,
-            deadline = dueDate.toLongOrNull(),
-            done = false,
-            createdAt = task?.createdAt ?: Date().time,
-            changedAt = Date().time,
-            color = task?.color ?: "#FFFFFF",
-            lastUpdatedBy = "user123",
-            files = task?.files
-        )
-        onSave(todoItem)
     }
 }
-
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -257,7 +252,7 @@ fun MyDatePickerDialog(
 
 @Composable
 fun MyComplexMenu(
-    onItemSelected: (String) -> Unit
+    onItemSelected: (Importance) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
     var selectedItem by remember { mutableStateOf("Нет") }
@@ -293,7 +288,7 @@ fun MyComplexMenu(
             modifier = Modifier.width(200.dp)
         ) {
             DropdownMenuItem(onClick = {
-                onItemSelected("low")
+                onItemSelected(Importance.LOW)
                 selectedItem = "Нет"
                 expanded = false
             }) {
@@ -305,7 +300,7 @@ fun MyComplexMenu(
                 }
             }
             DropdownMenuItem(onClick = {
-                onItemSelected("basic")
+                onItemSelected(Importance.MEDIUM)
                 selectedItem = "Низкий"
                 expanded = false
             }) {
@@ -317,7 +312,7 @@ fun MyComplexMenu(
                 }
             }
             DropdownMenuItem(onClick = {
-                onItemSelected("important")
+                onItemSelected(Importance.HIGH)
                 selectedItem = "!! Высокий"
                 expanded = false
             }) {
@@ -366,9 +361,8 @@ fun DeleteContainer(
             modifier = Modifier
                 .weight(1f)
                 .clickable {
-                    Log.d("NotesScreen", "Deleting note: ${isDeleteEnabled && task != null}")
                     if (isDeleteEnabled && task != null) {
-                        viewModel.deleteNote(task.id)
+                        viewModel.deleteNote(task)
                         navController.popBackStack()
                     }
                 }
@@ -414,6 +408,20 @@ fun SecondScreenPreview() {
                     .fillMaxSize()
                     .padding(innerPadding)
             ) {
+                TodoInputFields(
+                    TodoItem(
+                        "1",
+                        "Hello",
+                        Importance.LOW,
+                        null,
+                        false,
+                        Date(),
+                        Date("")
+                    )
+                ) {
+
+                }
+
 
 
 //                DeleteContainer(true)
